@@ -6,6 +6,27 @@ const LANGUAGE_KEY = 'onionguard_demo_lang';
 const GRADING_RULES_KEY = 'onionguard_grading_rules';
 const MODEL_ENGINE_KEY = 'onionguard_model_engine';
 const CUSTOM_MODEL_CONNECTED_KEY = 'onionguard_custom_model_connected';
+const ROBOFLOW_KEY_STORAGE = 'onionguard_roboflow_key';
+
+export function getStoredRoboflowKey(): string {
+  try {
+    return localStorage.getItem(ROBOFLOW_KEY_STORAGE) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function saveStoredRoboflowKey(key: string): void {
+  try {
+    if (key.trim()) {
+      localStorage.setItem(ROBOFLOW_KEY_STORAGE, key.trim());
+    } else {
+      localStorage.removeItem(ROBOFLOW_KEY_STORAGE);
+    }
+  } catch {
+    // ignore
+  }
+}
 
 export interface GradingRules {
   minHealthyGradeA: number; // default 70

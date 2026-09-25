@@ -5,8 +5,10 @@ import {
   ImageAnalysisItem,
   OnionDefectType,
 } from '../types';
+import { getStoredRoboflowKey } from './storage';
 
 const API_URL = '/api/analyze-onion';
+const ROBOFLOW_MODEL_ID = 'chandrajith-j/onions-quality-analysis-1-yolo11n-t1';
 
 interface RoboflowPrediction {
   x?: number;
@@ -172,6 +174,109 @@ function convertPredictionToBox(
   };
 }
 
+async function directRoboflowInference(
+  imageSrc: string,
+  apiKey: string
+): Promise<RoboflowResponse> {
+  const cleanBase64 = imageSrc.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '').trim();
+  const detectUrl = `https://detect.roboflow.com/${ROBOFLOW_MODEL_ID}?api_key=${encodeURIComponent(apiKey)}`;
+
+  let response = await fetch(detectUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: cleanBase64,
+  });
+
+  if (!response.ok && response.status !== 401) {
+    const serverlessUrl = `https://serverless.roboflow.com/${ROBOFLOW_MODEL_ID}?api_key=${encodeURIComponent(apiKey)}`;
+    const slRes = await fetch(serverlessUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: cleanBase64,
+    });
+    if (slRes.ok) {
+      response = slRes;
+    }
+  }
+
+  const rawText = await response.text();
+  let json: any = null;
+  try {
+    json = JSON.parse(rawText);
+  } catch {}
+
+  if (!response.ok) {
+    const msg = json?.message || json?.error || `Roboflow returned status ${response.status}`;
+    throw new Error(msg);
+  }
+
+  if (!json || typeof json !== 'object') {
+    throw new Error('Roboflow API returned invalid data format.');
+  }
+
+  return json as RoboflowResponse;
+}
+
+export async function testRoboflowConnection(
+  customKey?: string
+): Promise<{ success: boolean; message: string }> {
+  const keyToTest = (
+    customKey ||
+    getStoredRoboflowKey() ||
+    (import.meta.env.VITE_ROBOFLOW_API_KEY as string | undefined) ||
+    ''
+  ).trim();
+
+  if (!keyToTest) {
+    // Check backend health status first
+    try {
+      const healthRes = await fetch('/api/health');
+      if (healthRes.ok) {
+        const healthData = await healthRes.json();
+        if (healthData.roboflowKeyConfigured) {
+          return {
+            success: true,
+            message: 'Connected: Backend environment variable ROBOFLOW_API_KEY is active.',
+          };
+        }
+      }
+    } catch {}
+
+    return {
+      success: false,
+      message: 'No Roboflow API key detected. Please configure ROBOFLOW_API_KEY in Netlify or enter it in Settings.',
+    };
+  }
+
+  try {
+    // Quick test against Roboflow API
+    const testUrl = `https://detect.roboflow.com/${ROBOFLOW_MODEL_ID}?api_key=${encodeURIComponent(keyToTest)}`;
+    const res = await fetch(testUrl);
+    const data = await res.json().catch(() => null);
+
+    if (res.status === 401 || res.status === 403) {
+      return {
+        success: false,
+        message: data?.message || 'Unauthorized: The provided Roboflow API key is invalid.',
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Connected successfully: Roboflow model is verified and authorized.',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: 'Connection check failed: ' + (err instanceof Error ? err.message : String(err)),
+    };
+  }
+}
+
 async function analyseSingleImage(
   imageSrc: string,
   imageIndex: number
@@ -179,45 +284,95 @@ async function analyseSingleImage(
   item: ImageAnalysisItem;
   boxes: BoundingBox[];
 }> {
-  const formData = new FormData();
+  const storedKey = getStoredRoboflowKey();
+  const viteKey = import.meta.env.VITE_ROBOFLOW_API_KEY as string | undefined;
+  const fallbackKey = storedKey || viteKey || '';
 
-  const blob = await fetch(imageSrc).then((response) => {
-    if (!response.ok) {
-      throw new Error('Could not prepare image for analysis.');
-    }
-    return response.blob();
-  });
+  let data: RoboflowResponse | null = null;
+  let backendFailed = false;
 
-  formData.append(
-    'image',
-    blob,
-    `onion-${imageIndex}.jpg`
-  );
-
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    body: formData,
-  });
-
-  let data: RoboflowResponse | { error?: string; details?: unknown };
-
+  // 1. First attempt: Call the backend API (/api/analyze-onion)
   try {
-    data = await response.json();
-  } catch {
-    throw new Error('The analysis server returned an invalid response.');
+    const payload = {
+      image: imageSrc,
+      apiKey: storedKey || undefined,
+    };
+
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const rawText = await response.text();
+    let parsed: any = null;
+
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      // Non-JSON response (e.g. HTML 404/500/redirect from Netlify when function isn't yet routed)
+      backendFailed = true;
+      console.warn('Backend returned non-JSON:', rawText.slice(0, 100));
+    }
+
+    if (parsed) {
+      if (!response.ok) {
+        const errorMsg =
+          typeof parsed.error === 'string'
+            ? parsed.error
+            : typeof parsed.message === 'string'
+            ? parsed.message
+            : `Analysis server returned status ${response.status}`;
+
+        // If backend reports missing key or 401, check if client has fallbackKey
+        if ((response.status === 400 || response.status === 401) && fallbackKey) {
+          backendFailed = true;
+        } else {
+          throw new Error(errorMsg);
+        }
+      } else {
+        data = parsed as RoboflowResponse;
+      }
+    }
+  } catch (backendErr) {
+    if (backendErr instanceof Error && !backendFailed) {
+      // Specific error thrown from backend response
+      if (fallbackKey) {
+        backendFailed = true;
+      } else {
+        throw backendErr;
+      }
+    } else {
+      backendFailed = true;
+    }
   }
 
-  if (!response.ok) {
-    const errorMessage =
-      'error' in data && typeof data.error === 'string'
-        ? data.error
-        : 'Roboflow analysis failed.';
-
-    throw new Error(errorMessage);
+  // 2. Second attempt: Direct client-side inference if backend returned non-JSON or failed and key is available
+  if (!data && backendFailed) {
+    if (fallbackKey) {
+      try {
+        data = await directRoboflowInference(imageSrc, fallbackKey);
+      } catch (directErr) {
+        throw new Error(
+          'Roboflow inference failed: ' +
+            (directErr instanceof Error ? directErr.message : String(directErr))
+        );
+      }
+    } else {
+      throw new Error(
+        'The analysis server could not be reached or returned an unexpected response. Please ensure your Netlify environment variable ROBOFLOW_API_KEY is configured, or add your key in Settings.'
+      );
+    }
   }
 
-  const predictions = Array.isArray((data as RoboflowResponse).predictions)
-    ? (data as RoboflowResponse).predictions!
+  if (!data) {
+    throw new Error('No analysis data received from the AI model.');
+  }
+
+  const predictions = Array.isArray(data.predictions)
+    ? data.predictions
     : [];
 
   const boxes = predictions

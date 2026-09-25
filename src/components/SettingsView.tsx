@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Globe2, 
   Sliders, 
@@ -13,11 +13,20 @@ import {
   Cpu,
   UploadCloud,
   Check,
-  AlertCircle
+  AlertCircle,
+  Key,
+  RefreshCw
 } from 'lucide-react';
 import { Language, ModelEngineType, ViewMode } from '../types';
 import { translations } from '../utils/translations';
-import { GradingRules, saveStoredRules, resetDemoAssessments } from '../utils/storage';
+import { 
+  GradingRules, 
+  saveStoredRules, 
+  resetDemoAssessments,
+  getStoredRoboflowKey,
+  saveStoredRoboflowKey
+} from '../utils/storage';
+import { testRoboflowConnection } from '../utils/roboflowService';
 
 interface SettingsViewProps {
   language: Language;
@@ -52,6 +61,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [customModelFileName, setCustomModelFileName] = useState<string | null>(
     customModelConnected ? 'onion_mobilenet_v2.json' : null
   );
+
+  // Roboflow API configuration state
+  const [roboflowKey, setRoboflowKey] = useState<string>(getStoredRoboflowKey());
+  const [keySavedMessage, setKeySavedMessage] = useState(false);
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    // Run an initial quick health check
+    testRoboflowConnection().then((res) => {
+      setTestResult(res);
+    });
+  }, []);
+
+  const handleSaveRoboflowKey = (e: React.FormEvent) => {
+    e.preventDefault();
+    saveStoredRoboflowKey(roboflowKey);
+    setKeySavedMessage(true);
+    setTimeout(() => setKeySavedMessage(false), 2500);
+    handleTestConnection();
+  };
+
+  const handleTestConnection = async () => {
+    setTestLoading(true);
+    try {
+      const res = await testRoboflowConnection(roboflowKey);
+      setTestResult(res);
+    } finally {
+      setTestLoading(false);
+    }
+  };
 
   const handleSaveRules = (e: React.FormEvent) => {
     e.preventDefault();
@@ -175,6 +215,96 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
+      </div>
+
+      {/* Roboflow Model & API Key Configuration */}
+      <div className="bg-white rounded-3xl border-2 border-[#e4e1d3] p-6 space-y-4 shadow-xs">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Key className="w-5 h-5 text-[#8a5f12]" />
+            <h2 className="text-base font-bold text-[#174327] font-heading">
+              Roboflow API &amp; Netlify Integration
+            </h2>
+          </div>
+          <button
+            onClick={handleTestConnection}
+            disabled={testLoading}
+            type="button"
+            className="text-xs font-semibold text-[#1c5a35] hover:text-[#174327] flex items-center gap-1.5 transition cursor-pointer bg-[#e0eee2] px-3 py-1.5 rounded-xl border border-[#bcd6c0]"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${testLoading ? 'animate-spin' : ''}`} />
+            <span>{testLoading ? 'Verifying...' : 'Test Connection'}</span>
+          </button>
+        </div>
+
+        <p className="text-xs text-[#55665b] leading-relaxed">
+          The app uses the YOLO11n model <code>chandrajith-j/onions-quality-analysis-1-yolo11n-t1</code> for onion defect detection. On Netlify, the API key is retrieved securely via Netlify Serverless Functions (<code>ROBOFLOW_API_KEY</code>). You can also provide or override the key below for immediate direct access.
+        </p>
+
+        {/* Live Status Banner */}
+        {testResult && (
+          <div
+            className={`p-3.5 rounded-2xl text-xs font-semibold flex items-start gap-2.5 border ${
+              testResult.success
+                ? 'bg-[#e0eee2] border-[#bcd6c0] text-[#1c5a35]'
+                : 'bg-[#fcf3e8] border-[#f4dbb8] text-[#8a5f12]'
+            }`}
+          >
+            {testResult.success ? (
+              <CheckCircle2 className="w-4 h-4 text-[#1c5a35] shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-[#8a5f12] shrink-0 mt-0.5" />
+            )}
+            <div className="space-y-0.5">
+              <span className="font-bold">{testResult.success ? 'Model Status: Active' : 'Model Status: Action Required'}</span>
+              <p className="font-normal opacity-90">{testResult.message}</p>
+            </div>
+          </div>
+        )}
+
+        {keySavedMessage && (
+          <div className="p-3 bg-[#e0eee2] border border-[#bcd6c0] rounded-xl text-[#1c5a35] text-xs font-semibold flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>Roboflow key saved successfully!</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSaveRoboflowKey} className="space-y-3 pt-1">
+          <div>
+            <label className="block text-xs font-bold text-[#1c2a20] mb-1 font-heading">
+              Roboflow API Key (Direct / Override)
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={roboflowKey}
+                onChange={(e) => setRoboflowKey(e.target.value)}
+                placeholder="Enter your Roboflow API key (e.g. rf_... or API key)"
+                className="flex-1 bg-[#fcfbf9] border border-[#cfcbb8] rounded-xl px-3.5 py-2.5 text-xs text-[#1c2a20] placeholder-[#88968d] focus:outline-none focus:ring-2 focus:ring-[#1c5a35]"
+              />
+              <button
+                type="submit"
+                className="bg-[#1c5a35] hover:bg-[#174327] text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Save Key</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-[#f8fafc] p-3 rounded-xl border border-[#cfcbb8] text-[11px] text-[#55665b] space-y-1">
+            <div className="font-bold text-[#1c2a20]">Netlify Deployment Instructions:</div>
+            <p>
+              1. In your Netlify Site dashboard, go to <strong>Site configuration &gt; Environment variables</strong>.
+            </p>
+            <p>
+              2. Add <code>ROBOFLOW_API_KEY</code> with your key.
+            </p>
+            <p>
+              3. The Netlify serverless function at <code>/api/analyze-onion</code> will automatically use it for server-side inference.
+            </p>
+          </div>
+        </form>
       </div>
 
       {/* Language Section */}

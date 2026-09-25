@@ -4,11 +4,28 @@
 
 [functions]
   directory = "netlify/functions"
-  external_node_modules = ["express", "multer", "serverless-http"]
   node_bundler = "esbuild"
 
+# Direct analysis route
+[[redirects]]
+  from = "/api/analyze-onion"
+  to = "/.netlify/functions/api"
+  status = 200
+
+# Health check route
+[[redirects]]
+  from = "/api/health"
+  to = "/.netlify/functions/api"
+  status = 200
+
+# Any other /api/* routes forwarded to Netlify Functions
 [[redirects]]
   from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
+  to = "/.netlify/functions/api"
   status = 200
-  force = true
+
+# Client-side routing SPA fallback for Vite React
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
