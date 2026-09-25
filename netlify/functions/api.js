@@ -7,7 +7,7 @@ const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024
+    fileSize: 5 * 1024 * 1024
   }
 });
 
@@ -25,9 +25,13 @@ app.post("/analyze-onion", upload.single("image"), async (req, res) => {
   try {
     const apiKey = process.env.ROBOFLOW_API_KEY?.trim();
 
+    console.log("API key available:", Boolean(apiKey));
+    console.log("Uploaded file:", req.file?.originalname);
+    console.log("File size:", req.file?.size);
+
     if (!apiKey) {
       return res.status(500).json({
-        error: "ROBOFLOW_API_KEY is missing"
+        error: "ROBOFLOW_API_KEY is missing in Netlify environment variables"
       });
     }
 
@@ -39,11 +43,13 @@ app.post("/analyze-onion", upload.single("image"), async (req, res) => {
 
     const base64Image = req.file.buffer.toString("base64");
 
-    const roboflowUrl =
+    const url =
       `https://serverless.roboflow.com/${MODEL_ID}` +
       `?api_key=${encodeURIComponent(apiKey)}`;
 
-    const response = await fetch(roboflowUrl, {
+    console.log("Sending image to Roboflow...");
+
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded"
@@ -52,6 +58,9 @@ app.post("/analyze-onion", upload.single("image"), async (req, res) => {
     });
 
     const responseText = await response.text();
+
+    console.log("Roboflow status:", response.status);
+    console.log("Roboflow response:", responseText.slice(0, 1000));
 
     let data;
 
@@ -64,20 +73,19 @@ app.post("/analyze-onion", upload.single("image"), async (req, res) => {
     }
 
     if (!response.ok) {
-      console.error("Roboflow error:", data);
-
       return res.status(response.status).json({
         error: "Roboflow inference failed",
+        roboflowStatus: response.status,
         details: data
       });
     }
 
-    res.json(data);
+    return res.json(data);
 
   } catch (error) {
-    console.error("Server error:", error);
+    console.error("SERVER ERROR:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Failed to analyze onion image",
       details: error instanceof Error
         ? error.message
