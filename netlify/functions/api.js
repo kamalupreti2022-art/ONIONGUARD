@@ -23,6 +23,14 @@ app.get("/health", (req, res) => {
 
 app.post("/analyze-onion", upload.single("image"), async (req, res) => {
   try {
+    console.log("=== ONION ANALYSIS START ===");
+
+const apiKey = process.env.ROBOFLOW_API_KEY?.trim();
+
+console.log("API key exists:", Boolean(apiKey));
+console.log("Image received:", Boolean(req.file));
+console.log("Image size:", req.file?.size || 0);
+console.log("Model ID:", MODEL_ID);
     const apiKey = process.env.ROBOFLOW_API_KEY?.trim();
 
     console.log("API key available:", Boolean(apiKey));
@@ -56,8 +64,11 @@ app.post("/analyze-onion", upload.single("image"), async (req, res) => {
       },
       body: base64Image
     });
+    console.log("Roboflow HTTP status:", response.status);
 
     const responseText = await response.text();
+    console.log("Roboflow response:", responseText);
+    console.log("=== ONION ANALYSIS END ===");
 
     console.log("Roboflow status:", response.status);
     console.log("Roboflow response:", responseText.slice(0, 1000));
